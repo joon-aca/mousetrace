@@ -1,5 +1,4 @@
-MouseTrace
-==========
+# MouseTrace
 
 A read-only macOS mouse diagnostic. Every physical button press gets an id (#n)
 and is traced through each layer of the input pipeline:
@@ -13,16 +12,36 @@ Each CG line shows +latency from the HID press. If any layer misses a press
 within 500ms, a "✗✗✗ SWALLOWED between X and Y" verdict is printed, followed by a
 DIAGNOSTICS dump.
 
-Run:
-  ./run.command
+```
+make run        trace every click live (or double-click run.command)
+make install    build + (re)start the stuck-button watchdog at login
+make status     watchdog state and recent log
+make uninstall  stop and remove the watchdog
+```
 
-If macOS blocks monitoring, enable Terminal under:
-  System Settings > Privacy & Security > Accessibility
-  System Settings > Privacy & Security > Input Monitoring
-Then quit/reopen Terminal and rerun.
+If macOS blocks monitoring during `make run`, enable your terminal under
+System Settings > Privacy & Security > Accessibility and Input Monitoring,
+then quit/reopen the terminal and rerun.
 
-WHAT IT LOGS
-------------
+## Stuck-button watchdog
+
+macOS merges button state across every pointing device. If one mouse gets stuck
+reporting a button as pressed (say, a Magic Mouse squashed in a bag), clicks on
+every other mouse are silently absorbed. `make install` runs `MouseTrace --watch`
+as a LaunchAgent. It posts a notification when a button has been held for 10s
+and names the device holding it.
+
+Stuck detection works with no permissions. Naming the device needs Input
+Monitoring for MouseTrace itself (System Settings > Privacy & Security > Input
+Monitoring); the running watchdog picks up the grant automatically. Builds are
+signed with your Apple Development identity so the grant survives rebuilds.
+Log: ~/Library/Logs/MouseTrace/watch.log
+
+## Tracer
+
+### What it logs
+
+```
 Startup / hot-plug:
   DEVICE   every pointing device, its open result, and every process holding a
            user client on it. "kIOReturnExclusiveAccess" means another process
@@ -40,9 +59,10 @@ Per click:
   CG lines: position, clickState, target app, source process, ⚠ if posted by
             software, frontmost app and the window under the cursor (flags
             invisible overlays).
+```
 
-WHEN THE BUG HAPPENS
---------------------
+### When the bug happens
+
 Do not reboot or unplug anything.
 
 1. Click the physical mouse 5 times.
@@ -52,7 +72,9 @@ Do not reboot or unplug anything.
 5. Press Ctrl-C in Terminal.
 6. Save mouse-trace.log.
 
-Reading a SWALLOWED verdict:
+### Reading a SWALLOWED verdict
+
+```
 - HID → CG-HID:      device reported it, WindowServer never got it. Most common
                      cause: ANOTHER device is stuck holding that button (macOS
                      merges button state across devices, so your press is absorbed
@@ -66,5 +88,6 @@ Reading a SWALLOWED verdict:
   invisible overlay window: check window= on the CG-HEAD line).
 - No HID line at all: the press never reached IOKit (hardware, Bluetooth, or a
   device seized by another process, which hides it from MouseTrace too).
+```
 
 All Quartz taps are listen-only and return every event unchanged.
