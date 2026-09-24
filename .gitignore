@@ -1,0 +1,5 @@
+# Build output
+/MouseTrace
+
+# Trace logs contain app/window names from your session
+*.log
