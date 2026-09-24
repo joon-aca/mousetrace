@@ -72,7 +72,7 @@ let ioReturnNames: [UInt32: String] = [
     0xE00002C5: "kIOReturnExclusiveAccess — another process has SEIZED this device; its input bypasses normal delivery",
     0xE00002C7: "kIOReturnUnsupported",
     0xE00002CD: "kIOReturnNotOpen",
-    0xE00002E2: "kIOReturnNotPermitted — grant Input Monitoring to Terminal",
+    0xE00002E2: "kIOReturnNotPermitted — grant Input Monitoring (to your terminal for make run, to MouseTrace for the watchdog)",
 ]
 
 func describeIOReturn(_ r: IOReturn) -> String {
@@ -159,10 +159,14 @@ func deviceKey(_ d: IOHIDDevice) -> UnsafeMutableRawPointer {
     Unmanaged.passUnretained(d).toOpaque()
 }
 
+func deviceName(_ d: IOHIDDevice) -> String {
+    let product = IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String ?? "unnamed device"
+    let maker = IOHIDDeviceGetProperty(d, kIOHIDManufacturerKey as CFString) as? String
+    return maker.map { "\($0) \(product)" } ?? product
+}
+
 func deviceLabel(_ d: IOHIDDevice) -> String {
     func prop(_ key: String) -> Any? { IOHIDDeviceGetProperty(d, key as CFString) }
-    let product = prop(kIOHIDProductKey) as? String ?? "unnamed"
-    let maker = prop(kIOHIDManufacturerKey) as? String
     let transport = prop(kIOHIDTransportKey) as? String ?? "?"
     let vid = prop(kIOHIDVendorIDKey) as? Int ?? 0
     let pid = prop(kIOHIDProductIDKey) as? Int ?? 0
@@ -171,8 +175,7 @@ func deviceLabel(_ d: IOHIDDevice) -> String {
     let usage = prop(kIOHIDPrimaryUsageKey) as? Int ?? 0
     var entryID: UInt64 = 0
     IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(d), &entryID)
-    let name = maker.map { "\($0) \(product)" } ?? product
-    return String(format: "%@ [%@ %04x:%04x loc 0x%x usage %d:%d regID 0x%llx]", name, transport, vid, pid, loc, page, usage, entryID)
+    return String(format: "%@ [%@ %04x:%04x loc 0x%x usage %d:%d regID 0x%llx]", deviceName(d), transport, vid, pid, loc, page, usage, entryID)
 }
 
 func deviceInfo(for d: IOHIDDevice) -> DeviceInfo {
@@ -256,6 +259,79 @@ let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptions
 // IOHIDDevice per dict for the same service, so every click would be delivered and logged twice.
 let mouseMatch: [String: Any] = [kIOHIDDeviceUsagePageKey: kHIDPage_GenericDesktop, kIOHIDDeviceUsageKey: kHIDUsage_GD_Mouse]
 IOHIDManagerSetDeviceMatching(manager, mouseMatch as CFDictionary)
+
+// MARK: - Watch mode: stuck-button watchdog
+
+let stuckThreshold: TimeInterval = 10
+
+func downEventType(_ button: Int) -> CGEventType {
+    switch button {
+    case 0: return .leftMouseDown
+    case 1: return .rightMouseDown
+    default: return .otherMouseDown
+    }
+}
+
+/// Posts a macOS notification. Text goes in via argv so no AppleScript escaping is needed.
+func notify(_ message: String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    p.arguments = ["-e", "on run argv", "-e", "display notification (item 1 of argv) with title \"MouseTrace\" sound name \"Basso\"", "-e", "end run", message]
+    do { try p.run() } catch { log("notification failed: \(error)") }
+}
+
+/// Polls the system-wide button state; when a button has been held past the threshold, names the device
+/// holding it and posts one notification per stuck episode.
+func runWatchdog() -> Never {
+    // Stuck detection needs no permission; naming the holding device needs Input Monitoring.
+    func hidGranted() -> Bool { IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted }
+    var hidOpen = false
+    func openHIDIfGranted() {
+        guard !hidOpen, hidGranted() else { return }
+        hidOpen = true
+        log("watchdog: Input Monitoring granted, device names available. HID open: \(describeIOReturn(IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))))")
+    }
+    if !hidGranted() {
+        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        log("watchdog: Input Monitoring not granted; stuck buttons are still detected, but not which device holds them. Enable MouseTrace in System Settings > Privacy & Security > Input Monitoring (picked up automatically).")
+    }
+    openHIDIfGranted()
+    log("watchdog: alerting when a button is held ≥ \(Int(stuckThreshold))s")
+
+    var alerted: Set<Int> = []
+    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        openHIDIfGranted()
+        for button in 0..<3 {
+            guard systemButtonHeld(button) else {
+                if alerted.remove(button) != nil { log("\(buttonName(button)) released") }
+                continue
+            }
+            let held = CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: downEventType(button))
+            guard held >= stuckThreshold, !alerted.contains(button) else { continue }
+            alerted.insert(button)
+            let holders = currentDevices().filter { heldButtons(of: $0.0).contains(button) }
+            let who = holders.isEmpty
+                ? (hidOpen
+                    ? "no device reports it; stuck in the HID event system"
+                    : "unknown device; grant MouseTrace Input Monitoring to see which")
+                : holders.map { deviceName($0.0) }.joined(separator: ", ")
+            log(String(format: "⚠ %@ held %.0fs by %@", buttonName(button), held, who))
+            for (d, info) in holders { logDevice(d, info) }
+            notify(String(format: "%@ button stuck down for %.0fs: %@. Clicks on other mice will be ignored until it's released.",
+                          buttonName(button), held, who))
+        }
+    }
+    RunLoop.main.run()
+    exit(0)
+}
+
+switch CommandLine.arguments.dropFirst().first {
+case nil: break
+case "--watch": runWatchdog()
+default:
+    fputs("usage: MouseTrace            trace every click through the input pipeline\n       MouseTrace --watch    notify when a mouse button is stuck down\n", stderr)
+    exit(64)
+}
 
 let deviceMatched: IOHIDDeviceCallback = { _, _, _, device in
     let info = deviceInfo(for: device)
