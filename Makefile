@@ -13,13 +13,14 @@ PLIST      := $(HOME)/Library/LaunchAgents/$(LABEL).plist
 WATCH_LOG  := $(HOME)/Library/Logs/MouseTrace/watch.log
 
 .DEFAULT_GOAL := help
-.PHONY: help run install uninstall status
+.PHONY: help run install uninstall status restart
 
 help:
 	@echo "make run        trace every click live (Ctrl-C to stop; appends to mouse-trace.log)"
 	@echo "make install    build + (re)start the stuck-button watchdog at login"
 	@echo ""
 	@echo "make status     watchdog state and recent log"
+	@echo "make restart    restart the watchdog (needed after granting Input Monitoring)"
 	@echo "make uninstall  stop and remove the watchdog"
 
 $(BIN): $(SRC)
@@ -52,6 +53,11 @@ status:
 	else echo "watchdog not loaded (run: make install)"; fi
 	@echo "--- $(WATCH_LOG)"
 	@tail -n 5 "$(WATCH_LOG)" 2>/dev/null || true
+
+restart:
+	launchctl kickstart -k $(DOMAIN)/$(LABEL)
+	@sleep 3
+	@$(MAKE) --no-print-directory status
 
 uninstall:
 	@launchctl bootout $(DOMAIN)/$(LABEL) 2>/dev/null || true

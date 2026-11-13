@@ -28,13 +28,17 @@ then quit/reopen the terminal and rerun.
 macOS merges button state across every pointing device. If one mouse gets stuck
 reporting a button as pressed (say, a Magic Mouse squashed in a bag), clicks on
 every other mouse are silently absorbed. `make install` runs `MouseTrace --watch`
-as a LaunchAgent. It posts a notification when a button has been held for 10s
-and names the device holding it.
+as a LaunchAgent. It posts a notification when a button has been held for 90s
+and names the device holding it. It samples every 6s (`stuckPollInterval`), so
+the alert lands 90–96s after the press. Both constants are in MouseTrace.swift;
+the threshold is set high so ordinary long presses don't trigger it.
 
 Stuck detection works with no permissions. Naming the device needs Input
 Monitoring for MouseTrace itself (System Settings > Privacy & Security > Input
-Monitoring); the running watchdog picks up the grant automatically. Builds are
-signed with your Apple Development identity so the grant survives rebuilds.
+Monitoring: add `~/.local/bin/MouseTrace` with "+"). A running watchdog does not
+pick up a new grant, so restart it afterwards with `make restart` (the log then
+shows "Input Monitoring granted"). Builds are signed with your Apple Development
+identity so the grant survives rebuilds.
 Log: ~/Library/Logs/MouseTrace/watch.log
 
 ## Tracer
