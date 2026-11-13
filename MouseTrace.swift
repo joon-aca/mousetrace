@@ -262,7 +262,9 @@ IOHIDManagerSetDeviceMatching(manager, mouseMatch as CFDictionary)
 
 // MARK: - Watch mode: stuck-button watchdog
 
-let stuckThreshold: TimeInterval = 10
+let stuckThreshold: TimeInterval = 90
+/// How often the watchdog samples button state. Alerts fire within one interval after the threshold.
+let stuckPollInterval: TimeInterval = 6
 
 func downEventType(_ button: Int) -> CGEventType {
     switch button {
@@ -299,7 +301,7 @@ func runWatchdog() -> Never {
     log("watchdog: alerting when a button is held ≥ \(Int(stuckThreshold))s")
 
     var alerted: Set<Int> = []
-    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+    Timer.scheduledTimer(withTimeInterval: stuckPollInterval, repeats: true) { _ in
         openHIDIfGranted()
         for button in 0..<3 {
             guard systemButtonHeld(button) else {
